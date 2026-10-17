@@ -1,0 +1,85 @@
+name: blog-stack
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blog
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blog_dev_pwd}
+      POSTGRES_DB: blog
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
+    volumes:
+      - pg-data:/var/lib/postgres/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U blog -d blog']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+  migrate:
+    build:
+      context: .
+      target: deps
+    command: ['pnpm', 'exec', 'prisma', 'migrate', 'deploy']
+    environment:
+      DATABASE_URL: postgresql://blog:${POSTGRES_PASSWORD:-blog_dev_pwd}@postgres:5432/blog?scheme=blog_api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+  api:
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - '${API_PORT:-3000}:3000'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://blog:${POSTGRES_PASSWORD:-blog_dev_pwd}@postgres:5432/blog?schema=blog_api
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?在 blog-api/.env 里设置 JWT_ACCESS_SECRET（≥32 字符，见 .env.example）}
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_DIR: uploads
+      STORAGE_PUBLIC_PREFIX: /uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '-q',
+          '-O',
+          '/dev/null',
+          'http://localhost:3000/health/ready'
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+volumes:
+  pg-data:
+  uploads:
+  redis-data:
